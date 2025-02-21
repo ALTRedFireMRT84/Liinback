@@ -12,6 +12,13 @@ on your Nintendo Wii in another method without having to deal with this kind of 
 I hope you enjoy this release of Liinback that I made and thank you for using it. Y'all can use this to make public instances of Liinback. Be careful now, because somebody or Google could take action with your instances or my
 project here I made.
 
+<img src="./images/preview/HCXEWB_2025-02-21_13-16-49.png"/>
+<img src="./images/preview/HCXEWB_2025-02-21_13-17-04.png"/>
+<img src="./images/preview/HCXEWB_2025-02-21_13-17-30.png"/>
+<img src="./images/preview/HCXEWB_2025-02-21_13-17-42.png"/>
+<img src="./images/preview/HCXEWB_2025-02-21_13-25-31.png"/>
+<img src="./images/preview/HCXEWB_2025-02-21_13-25-55.png"/>
+
 Credits:
 
 "Liinback" author by RedFire (mrt84)
