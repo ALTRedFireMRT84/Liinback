@@ -18,6 +18,7 @@ project here I made.
 <img src="./images/preview/HCXEWB_2025-02-21_13-17-42.png"/>
 <img src="./images/preview/HCXEWB_2025-02-21_13-25-31.png"/>
 <img src="./images/preview/HCXEWB_2025-02-21_13-25-55.png"/>
+[Click here to watch the preview on how the video playback runs and works](https://raw.githubusercontent.com/ALTRedFireMRT84/Liinback/refs/heads/main/assets/preview/Dolphin%202025-02-21%2013-22-08-847.mp4)
 
 Credits:
 
