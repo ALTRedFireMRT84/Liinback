@@ -5,13 +5,11 @@ import os
 import json
 import subprocess
 import threading
-import yt_dlp
 import xml.etree.ElementTree as ET
 import re
 from datetime import datetime, timedelta
 from time import sleep
 from debug import request_dump
-from player import VideoLoader
 from api import Invidious, InnerTube, DataAPI
 from wiiVideoLoader import GetVideo, GetVideoInfo
 from io import BytesIO
@@ -35,7 +33,6 @@ OAUTH2_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 CLIENT_ID = '627431331381.apps.googleusercontent.com'
 CLIENT_SECRET = 'O_HOjELPNFcHO_n_866hamcO'
 REDIRECT_URI = ''
-videoLoader = VideoLoader()
 invidious = Invidious()
 innerTube = InnerTube()
 getVideo = GetVideo()
@@ -1217,4 +1214,4 @@ if __name__ == '__main__':
     ip = root.find('ip').text
     port = root.find('port').text
     env = root.find('env').text
-    app.run(debug=True, host=ip, port=int(port))
+    app.run(port=int(port))
