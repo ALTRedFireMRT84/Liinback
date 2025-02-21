@@ -8,20 +8,39 @@ import threading
 import yt_dlp
 import xml.etree.ElementTree as ET
 import re
+from datetime import datetime, timedelta
 from time import sleep
 from debug import request_dump
-from api import Invidious, InnerTube
+from player import VideoLoader
+from api import Invidious, InnerTube, DataAPI
+from wiiVideoLoader import GetVideo, GetVideoInfo
 from io import BytesIO
+from pytube import YouTube
 app = Flask(__name__)
 colorama.init()
+accessId = "0bfngonDSa5eSDTA56gZtVNUWtqT9aFGmE4nn302WW7T2ZkzqUkY6IdHZlgvmu7dYAbXh9iVReBveBl78XoVlDSlVC20vKysr2bW"
+CACHE_DIR = "./cache_dir/subtitles"
+DEFAULTS = [
+    "<title>Error 404 (Not Found)!!1</title>",
+    """<?xml version="1.0" encoding="utf-8" ?>
+    <transcript>
+    <text start="0" dur="0.1"> </text>
+    </transcript>"""
+]
+API_KEY = 'AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
+DATA_API_KEY = 'AIzaSyDuziy6qTSaKhs0w4SKpLNWivKFNoWjQQA'
 processingVideos = []
 OAUTH2_DEVICE_CODE_URL = 'https://oauth2.googleapis.com/device/code'
 OAUTH2_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 CLIENT_ID = '627431331381.apps.googleusercontent.com'
 CLIENT_SECRET = 'O_HOjELPNFcHO_n_866hamcO'
 REDIRECT_URI = ''
+videoLoader = VideoLoader()
 invidious = Invidious()
 innerTube = InnerTube()
+getVideo = GetVideo()
+getVideoInfo = GetVideoInfo()
+dataApi = DataAPI()
 def installRequirements():
     packages = ['Flask', 'colorama', 'requests', 'yt-dlp']
     for package in packages:
@@ -52,30 +71,120 @@ def replaceToHTTP(url):
     if url.startswith("https://"):
         return url.replace("https://", "http://", 1)
     return url
+@app.route('/next', methods=['GET'])
+def get_video_data():
+    video_id = request.args.get('id')  # Get videoId from query parameters
+    
+    if not video_id:
+        return jsonify({'error': 'videoId is required'}), 400
+
+    url = f'https://www.youtube.com/youtubei/v1/next?videoId={video_id}&key={API_KEY}'
+    
+    headers = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'com.google.ios.youtube/20.03.02 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)',
+        'Accept': 'application/json',
+        'X-Goog-AuthUser': '0',  # If necessary for authentication
+    }
+    
+    payload = {
+        "context": {
+            "client": {
+                "clientName": "IOS",
+                "clientVersion": "20.03.02",
+                "deviceMake": "Apple",
+                "deviceModel": "iPhone16,2",  # iPhone 13 (or other iPhone model if necessary)
+                "userAgent": 'com.google.ios.youtube/20.03.02 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)',
+                "osName": "iPhone",
+                "osVersion": "18.2.1.22C161",
+            },
+        },
+        "INNERTUBE_CONTEXT_CLIENT_NAME": 5,
+        "PO_TOKEN_REQUIRED_CONTEXTS": ["GVS"],  # Placeholder; adjust based on the actual use case
+        "REQUIRE_JS_PLAYER": False,
+    }
+
+    response = requests.post(url, json=payload, headers=headers)
+    
+    if response.status_code == 200:
+        data = response.json()
+        return jsonify(data)
+    else:
+        return jsonify({'error': 'Failed to retrieve video data'}), response.status_code
+@app.route('/device_204', methods=['GET'])
+def device_204():
+    return ''
 @app.route('/api/search', methods=['GET'])
 def search():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     oauthToken = request.args.get('access_token')
     lang = request.args.get('lang')
     ip = getIp()
     port = getPort()
     query = request.args.get('q')
-    return innerTube.search(ip, port, query, lang)    
+    type = request.args.get('type')
+    return innerTube.search(ip, port, query, lang)
+@app.route('/api/v3/search', methods=['GET'])
+def searchV3():
+    ip = getIp()
+    port = getPort()
+    query = request.args.get('q')
+    type = request.args.get('type')
+    return innerTube.searchV3(ip, port, query)    
+@app.route('/api/v2/trending', methods=['GET'])
+def trending():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
+    ip = getIp()
+    port = getPort()
+    type_param = request.args.get('type')
+    return invidious.trends(ip, port, type_param)
 @app.route('/api/categories/<type>', methods=['GET'])
 def _category(type):
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
+    params = request.args.get('params')
     oauthToken = request.args.get('access_token')
     lang = request.args.get('lang')
-    return innerTube.category(ip, port, type, lang)        
+    return innerTube.category(ip, port, type, params, lang) 
+@app.route('/api/v2/categories/<type>', methods=['GET'])
+def _categoryV2(type):
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
+    ip = getIp()
+    port = getPort()
+    params = request.args.get('params')
+    return innerTube.categoryV2(ip, port, type, params)      
 @app.route('/api/categories/v2/<channelId>', methods=['GET'])
 def _categoryTwo(channelId):
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     oauthToken = request.args.get('access_token')
     lang = request.args.get('lang')
-    return innerTube.categoryTwo(ip, port, channelId, lang)    
+    return innerTube.categoryTwo(ip, port, channelId, lang)   
+@app.route('/api/v2/categories/v2/<channelId>', methods=['GET'])
+def _categoryTwoV2(channelId):
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
+    ip = getIp()
+    port = getPort()
+    return innerTube.categoryTwoV2(ip, port, channelId)      
 @app.route('/api/popular', methods=['GET'])
 def popular():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     format = request.args.get('format')
@@ -84,18 +193,21 @@ def popular():
 @app.route('/api/channels/default/uploads', methods=['GET'])
 def userUploadsOauthToken():
     oauthToken = request.args.get('access_token')
-    userInfoUrl = f"https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}"
+    userInfoUrl = f"https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true&key={API_KEY}&access_token={oauthToken}"
     response = requests.get(userInfoUrl)
     if response.status_code == 200:
         data = response.json()
         if "items" in data and len(data["items"]) > 0:
             channelId = data["items"][0].get("id", "")
             if channelId:
-                return redirect(f'/api/channels/{channelId}/uploads')
+                return redirect(f'/api/channels/{channelId}/uploads?key={accessId}')
         return jsonify({"error": "No channel data found"}), 404
     return jsonify({"error": "Failed to fetch user data"}), response.status_code
 @app.route('/api/v2/watch_history', methods=['GET'])
 def __watchHistory2():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     lang = request.args.get('lang')
@@ -103,6 +215,9 @@ def __watchHistory2():
     return innerTube.watchHistory2(ip, port, lang, oauthToken)
 @app.route('/api/watch_history', methods=['GET'])
 def _watchHistory():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     lang = request.args.get('lang')
@@ -110,6 +225,9 @@ def _watchHistory():
     return innerTube.watchHistory(ip, port, lang, oauthToken)    
 @app.route('/api/river', methods=['GET'])
 def _river():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     lang = request.args.get('lang')
@@ -117,13 +235,47 @@ def _river():
     return innerTube.river(ip, port, oauthToken, lang)    
 @app.route('/api/categories/v3/<channelId>', methods=['GET'])
 def _categoryThree(channelId):
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     oauthToken = request.args.get('access_token')
     lang = request.args.get('lang')
-    return innerTube.categoryThree(ip, port, channelId, lang)    
+    return innerTube.categoryThree(ip, port, channelId, lang) 
+@app.route('/api/explore', methods=['GET'])
+def _explore():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
+    ip = getIp()
+    port = getPort()
+    oauthToken = request.args.get('access_token')
+    lang = request.args.get('lang')
+    return innerTube.explore(ip, port, lang, oauthToken)      
+@app.route('/api/v2/categories/v3/<channelId>', methods=['GET'])
+def _categoryThreeV2(channelId):
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
+    ip = getIp()
+    port = getPort()
+    return innerTube.categoryThreeV2(ip, port, channelId)
+@app.route('/api/favorites', methods=['GET'])
+def _favorites():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
+    ip = getIp()
+    port = getPort()
+    lang = request.args.get('lang')
+    oauthToken = request.args.get('access_token')
+    return innerTube.favorites(ip, port, oauthToken, lang)    
 @app.route('/api/watch_later', methods=['GET'])
 def _watchLater():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     lang = request.args.get('lang')
@@ -131,11 +283,17 @@ def _watchLater():
     return innerTube.watchLater(ip, port, lang, oauthToken)    
 @app.route('/api/subscriptions', methods=['GET'])
 def _subscriptions():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     lang = request.args.get('lang')
     oauthToken = request.args.get('access_token')
     return innerTube.subscriptions(oauthToken)    
 @app.route('/api/playlists', methods=['GET'])
 def _playlists():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     lang = request.args.get('lang')
@@ -143,296 +301,47 @@ def _playlists():
     return innerTube.playlists(ip, port, oauthToken, lang)
 @app.route('/api/videos/<videoId>', methods=['GET'])
 def videoInfo(videoId):
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     lang = request.args.get('lang')
     oauthToken = request.args.get('access_token')
-    return innerTube.player(ip, port, videoId, lang)
+    return innerTube.player(ip, port, videoId, lang, oauthToken)
 @app.route('/api/liked_videos', methods=['GET'])
 def _likedVideos():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     lang = request.args.get('lang')
     oauthToken = request.args.get('access_token')
     return innerTube.likedVideos(ip, port, oauthToken, lang)
-@app.route('/api/v2/guide', methods=['GET'])
-def guide(oauthToken):
-    innerTube = InnerTube()
-    url = f'https://www.youtube.com/youtubei/v1/guide?key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20210714.01.00"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);
-@app.route('/api/v2/next/<videoId>', methods=['GET'])
-def next(videoId):
-    innerTube = InnerTube()
-    url = f'https://www.googleapis.com/youtubei/v1/next?key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&videoId={videoId}'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/57.0.2987.133 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "TVHTML5",
-                "clientVersion": "7.20211011"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);  
-@app.route('/api/v2/player/<videoId>', methods=['GET'])
-def _player(videoId):
-    innerTube = InnerTube()
-    url = f'https://www.googleapis.com/youtubei/v1/player?key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&videoId={videoId}'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'com.google.android.youtube/19.02.39 (Linux; U; Android 14) gzip'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "ANDROID",
-                "clientVersion": "19.02.39",
-                "androidSdkVersion": 34,
-                "mainAppWebInfo": {
-                    "graftUrl": "/watch?v=" + videoId
-                }
-            }
-        },
-        "videoId": videoId,
-    }
-    response = requests.post(url, headers=headers, json=payload)
-    return response.json()
-@app.route('/api/v2/watch_history/<oauthToken>', methods=['GET'])
-def _watchHistory2(oauthToken):
-    innerTube = InnerTube()
-    url = f'https://www.youtube.com/youtubei/v1/browse?browseId=FEhistory&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20210714.01.00"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);        
-@app.route('/api/v2/search', methods=['GET'])
-def _home():
-    query = request.args.get('q')
-    innerTube = InnerTube()
-    url = f'https://www.youtube.com/youtubei/v1/search?query={query}&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20210714.01.00"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);        
-@app.route('/api/v2/home', methods=['GET'])
-def home():
-    query = request.args.get('q')
-    innerTube = InnerTube()
-    url = f'https://www.youtube.com/youtubei/v1/browse?browseId=VLPLjSlr9-WHh-T5y-OIyVncK2sO2evRly5x&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20240814.00.00"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);        
-@app.route('/api/v2/playlists/<oauthToken>', methods=['GET'])
-def library(oauthToken):
-    innerTube = InnerTube()
-    url = f'https://www.youtube.com/youtubei/v1/browse?browseId=FElibrary&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20210714.01.00"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);
-@app.route('/api/v2/liked_videos', methods=['GET'])
-def _liked(oauthToken):
-    innerTube = InnerTube()
-    url = f'https://www.youtube.com/youtubei/v1/browse?browseId=VLLL&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20210714.01.00"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);     
-@app.route('/api/v2/watch_later/<oauthToken>', methods=['GET'])
-def _wl(oauthToken):
-    innerTube = InnerTube()
-    url = f'https://www.youtube.com/youtubei/v1/browse?browseId=VLWL&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20210714.01.00"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);
-@app.route('/api/v2/whatToWatch/<oauthToken>', methods=['GET'])
-def wtw(oauthToken):
-    innerTube = InnerTube()
-    url = f'https://www.youtube.com/youtubei/v1/browse?browseId=FEwhat_to_watch&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20210714.01.00"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);
-@app.route('/api/v2/channels/<oauthToken>', methods=['GET'])
-def channels_(oauthToken):
-    innerTube = InnerTube()
-    url = f'https://www.youtube.com/youtubei/v1/browse?browseId=FEchannels&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20210714.01.00"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);    
-@app.route('/api/v2/subscriptions/<oauthToken>', methods=['GET'])
-def subscriptions(oauthToken):
-    innerTube = InnerTube()
-    url = f'https://www.youtube.com/youtubei/v1/browse?browseId=FEsubscriptions&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}'
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20210714.01.00"
-            }
-        }
-    }    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return jsonify(data);
 @app.route('/api/channels/<channelId>/uploads', methods=['GET'])
 def userUploads(channelId):
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     lang = request.args.get('lang', 'en')
     oauthToken = request.args.get('access_token')
-    return invidious.user_uploads(ip, port, lang, channelId)
+    return dataApi.userUploads(ip, port, lang, channelId)
+@app.route('/api/v2/channels/<channelId>/uploads', methods=['GET'])
+def userUploadsV2(channelId):
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
+    ip = getIp()
+    port = getPort()
+    return invidious.user_uploads_V2(ip, port, channelId)
 @app.route('/api/_playlists', methods=['GET'])
 def playlistId():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     ip = getIp()
     port = getPort()
     lang = request.args.get('lang', 'en')
@@ -444,8 +353,21 @@ def playlistId():
         return innerTube.playlist(ip, port, lang, playlistId, oauthToken)
     else:
         return innerTube.playlist(ip, port, lang, playlistId)
+@app.route('/api/v3/playlists/<playlist_id>', methods=['GET'])
+def playlist__(playlist_id):
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
+    ip = getIp()
+    port = getPort()
+    if not playlist_id:
+        return jsonify({"error": "Playlist ID is required"}), 400
+    return invidious.playlistV2(ip, port, playlist_id)
 @app.route('/leanback_ajax', methods=['GET'])
 def leanback_ajax():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     oauthToken = request.args.get('access_token')
     action_featured = request.args.get('action_featured')
     action_environment = request.args.get('action_environment')
@@ -488,14 +410,14 @@ def leanback_ajax():
             },
             {
                 'gdata_url': {
-                    'en': f'http://{ip}:{port}/api/categories/v2/UC-9-kyTW8ZkZNDHQJ6FgpwQ?lang=en',
-                    'es': f'http://{ip}:{port}/api/categories/v2/UC-9-kyTW8ZkZNDHQJ6FgpwQ?lang=es',
-                    'fr': f'http://{ip}:{port}/api/categories/v2/UC-9-kyTW8ZkZNDHQJ6FgpwQ?lang=fr',
-                    'de': f'http://{ip}:{port}/api/categories/v2/UC-9-kyTW8ZkZNDHQJ6FgpwQ?lang=de',
-                    'ja': f'http://{ip}:{port}/api/categories/v2/UC-9-kyTW8ZkZNDHQJ6FgpwQ?lang=ja',
-                    'nl': f'http://{ip}:{port}/api/categories/v2/UC-9-kyTW8ZkZNDHQJ6FgpwQ?lang=nl',
-                    'it': f'http://{ip}:{port}/api/categories/v2/UC-9-kyTW8ZkZNDHQJ6FgpwQ?lang=it'
-                }.get(lang, f'http://{ip}:{port}/api/categories/v2/UC-9-kyTW8ZkZNDHQJ6FgpwQ?lang=en'),
+                    'en': f'http://{ip}:{port}/api/categories/trending?params=4gINGgt5dG1hX2NoYXJ0cw%3D%3D&lang=en',
+                    'es': f'http://{ip}:{port}/api/categories/trending?params=4gINGgt5dG1hX2NoYXJ0cw%3D%3D&lang=es',
+                    'fr': f'http://{ip}:{port}/api/categories/trending?params=4gINGgt5dG1hX2NoYXJ0cw%3D%3D&lang=fr',
+                    'de': f'http://{ip}:{port}/api/categories/trending?params=4gINGgt5dG1hX2NoYXJ0cw%3D%3D&lang=de',
+                    'ja': f'http://{ip}:{port}/api/categories/trending?params=4gINGgt5dG1hX2NoYXJ0cw%3D%3D&lang=ja',
+                    'nl': f'http://{ip}:{port}/api/categories/trending?params=4gINGgt5dG1hX2NoYXJ0cw%3D%3D&lang=nl',
+                    'it': f'http://{ip}:{port}/api/categories/trending?params=4gINGgt5dG1hX2NoYXJ0cw%3D%3D&lang=it'
+                }.get(lang, f'http://{ip}:{port}/api/categories/trending?params=4gINGgt5dG1hX2NoYXJ0cw%3D%3D&lang=en'),
                 'thumbnail': {
                     'en': f'http://{ip}:{port}/api/thumbnails/categories/v2/music?lang=en',
                     'es': f'http://{ip}:{port}/api/thumbnails/categories/v2/music?lang=es',
@@ -514,6 +436,35 @@ def leanback_ajax():
                     'nl': f'Muziek',
                     'it': f'Musica'
                 }.get(lang, f'Music')
+            },
+            {
+                'gdata_url': {
+                    'en': f'http://{ip}:{port}/api/categories/trending?params=4gIcGhpnYW1pbmdfY29ycHVzX21vc3RfcG9wdWxhcg%3D%3D&lang=en',
+                    'es': f'http://{ip}:{port}/api/categories/trending?params=4gIcGhpnYW1pbmdfY29ycHVzX21vc3RfcG9wdWxhcg%3D%3D&lang=es',
+                    'fr': f'http://{ip}:{port}/api/categories/trending?params=4gIcGhpnYW1pbmdfY29ycHVzX21vc3RfcG9wdWxhcg%3D%3D&lang=fr',
+                    'de': f'http://{ip}:{port}/api/categories/trending?params=4gIcGhpnYW1pbmdfY29ycHVzX21vc3RfcG9wdWxhcg%3D%3D&lang=de',
+                    'ja': f'http://{ip}:{port}/api/categories/trending?params=4gIcGhpnYW1pbmdfY29ycHVzX21vc3RfcG9wdWxhcg%3D%3D&lang=ja',
+                    'nl': f'http://{ip}:{port}/api/categories/trending?params=4gIcGhpnYW1pbmdfY29ycHVzX21vc3RfcG9wdWxhcg%3D%3D&lang=nl',
+                    'it': f'http://{ip}:{port}/api/categories/trending?params=4gIcGhpnYW1pbmdfY29ycHVzX21vc3RfcG9wdWxhcg%3D%3D&lang=it'
+                }.get(lang, f'http://{ip}:{port}/api/categories/trending?params=4gIcGhpnYW1pbmdfY29ycHVzX21vc3RfcG9wdWxhcg%3D%3D&lang=en'),
+                'thumbnail': {
+                    'en': f'http://{ip}:{port}/api/thumbnails/categories/v2/gaming?lang=en',
+                    'es': f'http://{ip}:{port}/api/thumbnails/categories/v2/gaming?lang=es',
+                    'fr': f'http://{ip}:{port}/api/thumbnails/categories/v2/gaming?lang=fr',
+                    'de': f'http://{ip}:{port}/api/thumbnails/categories/v2/gaming?lang=de',
+                    'ja': f'http://{ip}:{port}/api/thumbnails/categories/v2/gaming?lang=ja',
+                    'nl': f'http://{ip}:{port}/api/thumbnails/categories/v2/gaming?lang=nl',
+                    'it': f'http://{ip}:{port}/api/thumbnails/categories/v2/gaming?lang=it'
+                }.get(lang, f'http://{ip}:{port}/api/thumbnails/categories/v2/gaming?lang=en'),
+                'title': {
+                    'en': f'Gaming',
+                    'es': f'Juegos',
+                    'fr': f'Jeux vidéo',
+                    'de': f'Gaming',
+                    'ja': f'ゲーム',
+                    'nl': f'Games',
+                    'it': f'Giochi'
+                }.get(lang, f'Gaming')
             },
             {
                 'gdata_url': {
@@ -602,6 +553,35 @@ def leanback_ajax():
                     'it': f'Notizie'
                 }.get(lang, f'News')
             },
+{
+                'gdata_url': {
+                     'en': f'http://{ip}:{port}/api/categories/trending?params=4gIKGgh0cmFpbGVycw%3D%3D&lang=en',
+                     'es': f'http://{ip}:{port}/api/categories/trending?params=4gIKGgh0cmFpbGVycw%3D%3D&lang=es',
+                     'fr': f'http://{ip}:{port}/api/categories/trending?params=4gIKGgh0cmFpbGVycw%3D%3D&lang=fr',
+                     'de': f'http://{ip}:{port}/api/categories/trending?params=4gIKGgh0cmFpbGVycw%3D%3D&lang=de',
+                     'ja': f'http://{ip}:{port}/api/categories/trending?params=4gIKGgh0cmFpbGVycw%3D%3D&lang=ja',
+                     'nl': f'http://{ip}:{port}/api/categories/trending?params=4gIKGgh0cmFpbGVycw%3D%3D&lang=nl',
+                     'it': f'http://{ip}:{port}/api/categories/trending?params=4gIKGgh0cmFpbGVycw%3D%3D&lang=it',
+                }.get(lang, f'http://{ip}:{port}/api/categories/trending?params=4gIKGgh0cmFpbGVycw%3D%3D&lang=en'),
+                'thumbnail': {
+                    'en': f'http://{ip}:{port}/api/thumbnails/categories/v3/movies?lang=en',
+                    'es': f'http://{ip}:{port}/api/thumbnails/categories/v3/movies?lang=es',
+                    'fr': f'http://{ip}:{port}/api/thumbnails/categories/v3/movies?lang=fr',
+                    'de': f'http://{ip}:{port}/api/thumbnails/categories/v3/movies?lang=de',
+                    'ja': f'http://{ip}:{port}/api/thumbnails/categories/v3/movies?lang=ja',
+                    'nl': f'http://{ip}:{port}/api/thumbnails/categories/v3/movies?lang=nl',
+                    'it': f'http://{ip}:{port}/api/thumbnails/categories/v3/movies?lang=it'
+                }.get(lang, f'http://{ip}:{port}/api/thumbnails/categories/v3/movies?lang=en'),
+                'title': {
+                    'en': f'Film & Animation',
+                    'es': f'Películas y TV',
+                    'fr': f'Films et séries TV',
+                    'de': f'Films et séries TV',
+                    'ja': f'Films et séries TV',
+                    'nl': f'Films et séries TV',
+                    'it': f'Films et séries TV'
+                }.get(lang, f'Film & Animation')
+            },
             {
                 'gdata_url': {
                      'en': f'http://{ip}:{port}/api/_playlists?lang=en&id=PLrEnWoR732-BHrPp_Pm8_VleD68f9s14-',
@@ -634,7 +614,6 @@ def leanback_ajax():
         ]
     }    
     if oauthToken:
-        userPlaylistsUrl = f'https://www.youtube.com/youtubei/v1/browse?browseId=FElibrary&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}'
         headers = {
             'Content-Type': 'application/json',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -649,39 +628,7 @@ def leanback_ajax():
                 }
             }
         }        
-        responseData = requests.post(userPlaylistsUrl, json=payload, headers=headers)
-        if responseData.status_code == 200:
-            data = responseData.json()
-            contents = data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
-            for tab in contents:
-                tabRenderer = tab.get('tabRenderer', {})
-                sectionList = tabRenderer.get('content', {}).get('sectionListRenderer', {}).get('contents', [])                
-                for section in sectionList:
-                    itemSection = section.get('itemSectionRenderer', {}).get('contents', [])                    
-                    for item in itemSection:
-                        shelfRenderer = item.get('shelfRenderer', {})
-                        horizontalList = shelfRenderer.get('content', {}).get('horizontalListRenderer', {}).get('items', [])                        
-                        for video in horizontalList:
-                            lockupViewModel = video.get('lockupViewModel', {})
-                            title = lockupViewModel.get('metadata', {}).get('lockupMetadataViewModel', {}).get('title', {}).get('content', '')
-                            browseId = lockupViewModel.get('contentId', '')
-                            thumbnailUrl = ''                            
-                            try:
-                                thumbnailUrl = lockupViewModel.get('contentImage', {}).get('collectionThumbnailViewModel', {}).get('primaryThumbnail', {}).get('thumbnailViewModel', {}).get('image', {}).get('sources', [{}])[0].get('url', '')
-                                if 'mqdefault' in thumbnailUrl:
-                                    thumbnailUrl = thumbnailUrl.replace('mqdefault', 'mqdefault')
-                                thumbnailUrl = replaceToHTTP(thumbnailUrl)
-                            except (IndexError, KeyError):
-                                thumbnailUrl = ''                            
-                            if title and browseId:
-                                response['sets'].insert(0, {
-                                    'gdata_url': f'http://{ip}:{port}/api/_playlists?id={browseId}&access_token={oauthToken}&lang={lang}',
-                                    'thumbnail': thumbnailUrl,
-                                    'title': title
-                                })
-        else:
-            return Response('Failed to fetch playlists', status=500)
-        subscriptionsUrl = f'https://www.youtube.com/youtubei/v1/browse?browseId=FEchannels&key=AIzaS=yAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&access_token={oauthToken}'
+        subscriptionsUrl = f'https://www.youtube.com/youtubei/v1/browse?browseId=FEchannels&key={API_KEY}&access_token={oauthToken}'
         subscriptionsData = requests.post(subscriptionsUrl, json=payload, headers=headers)
         if subscriptionsData.status_code == 200:
             data = subscriptionsData.json()
@@ -711,7 +658,7 @@ def leanback_ajax():
 def fetchAndServeMusicThumbnail(ip, port, lang):
     if not ip or not port:
         return "Invalid IP or Port configuration", 500
-    url = f"http://{ip}:{port}/api/categories/v2/UC-9-kyTW8ZkZNDHQJ6FgpwQ?lang={lang}"
+    url = f"http://{ip}:{port}/api/categories/trending?params=4gINGgt5dG1hX2NoYXJ0cw%3D%3D&lang={lang}&key={accessId}"
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -729,7 +676,7 @@ def fetchAndServeMusicThumbnail(ip, port, lang):
 def fetchAndServePlaylistThumbnail(ip, port, lang, playlistId):
     if not ip or not port:
         return "Invalid IP or Port configuration", 500
-    url = f"http://{ip}:{port}/api/_playlists?lang={lang}&id={playlistId}"
+    url = f"http://{ip}:{port}/api/_playlists?lang={lang}&id={playlistId}&key={accessId}"
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -747,7 +694,7 @@ def fetchAndServePlaylistThumbnail(ip, port, lang, playlistId):
 def fetchAndServeSportThumbnail(ip, port, lang):
     if not ip or not port:
         return "Invalid IP or Port configuration", 500
-    url = f"http://{ip}:{port}/api/categories/v3/UCEgdi0XIXXZ-qJOFPf4JSKw?lang={lang}"
+    url = f"http://{ip}:{port}/api/categories/v3/UCEgdi0XIXXZ-qJOFPf4JSKw?lang={lang}&key={accessId}"
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -761,11 +708,29 @@ def fetchAndServeSportThumbnail(ip, port, lang):
             return redirect(default, code=302)
     except Exception as e:
         print("Error processing feed data:", e)
-        return "Error processing feed data", 500        
-def fetchAndServeGamingThumbnailThumbnail(ip, port, lang):
+        return "Error processing feed data", 500     
+def fetchAndServeMoviesThumbnail(ip, port, lang):
     if not ip or not port:
         return "Invalid IP or Port configuration", 500
-    url = f"http://{ip}:{port}/api/categories/v2/UCOpNcN46UbXVtpKMrmU4Abg?lang={lang}"
+    url = f"http://{ip}:{port}/api/categories/trending?params=4gIKGgh0cmFpbGVycw%3D%3D&lang={lang}"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.text
+        thumbnailMatch = re.search(r"<media:thumbnail yt:name=['\"]mqdefault['\"] url=['\"](.*?)['\"]", data)
+        thumbnailUrl = thumbnailMatch.group(1) if thumbnailMatch else None
+        if thumbnailUrl:
+            return redirect(thumbnailUrl, code=302)
+        else:
+            default = 'http://i.ytimg.com/vi/e/0.jpg'
+            return redirect(default, code=302)
+    except Exception as e:
+        print("Error processing feed data:", e)
+        return "Error processing feed data", 500         
+def fetchAndServeGamingThumbnail(ip, port, lang):
+    if not ip or not port:
+        return "Invalid IP or Port configuration", 500
+    url = f"http://{ip}:{port}/api/categories/trending?params=4gIcGhpnYW1pbmdfY29ycHVzX21vc3RfcG9wdWxhcg%3D%3D&lang={lang}&key={accessId}"
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -783,7 +748,7 @@ def fetchAndServeGamingThumbnailThumbnail(ip, port, lang):
 def fetchAndServeFashionBeautyThumbnail(ip, port, lang):
     if not ip or not port:
         return "Invalid IP or Port configuration", 500
-    url = f"http://{ip}:{port}/api/categories/v3/UCrpQ4p1Ql_hG8rKXIKM1MOQ?lang={lang}"
+    url = f"http://{ip}:{port}/api/categories/v3/UCrpQ4p1Ql_hG8rKXIKM1MOQ?lang={lang}&key={accessId}"
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -801,7 +766,7 @@ def fetchAndServeFashionBeautyThumbnail(ip, port, lang):
 def fetchAndServeNewsThumbnail(ip, port, lang):
     if not ip or not port:
         return "Invalid IP or Port configuration", 500
-    url = f"http://{ip}:{port}/api/categories/v3/UCYfdidRxbB8Qhf0Nx7ioOYw?lang={lang}"
+    url = f"http://{ip}:{port}/api/categories/v3/UCYfdidRxbB8Qhf0Nx7ioOYw?lang={lang}&key={accessId}"
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -819,7 +784,7 @@ def fetchAndServeNewsThumbnail(ip, port, lang):
 def fetchAndServeTrendsThumbnail(ip, port, lang):
     if not ip or not port:
         return "Invalid IP or Port configuration", 500
-    url = f"http://{ip}:{port}/api/categories/trending?lang={lang}"
+    url = f"http://{ip}:{port}/api/categories/trending?lang={lang}&key={accessId}"
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -835,7 +800,7 @@ def fetchAndServeTrendsThumbnail(ip, port, lang):
         print("Error processing feed data:", e)
         return "Error processing feed data", 500        
 def fetchAndServeLikesThumbnail(ip, port, lang, oauthToken):
-    _url = f'http://{ip}:{port}/api/liked_videos?lang={lang}&access_token={oauthToken}'
+    _url = f'http://{ip}:{port}/api/liked_videos?lang={lang}&access_token={oauthToken}&key={accessId}'
     try:
         response = requests.get(_url)
         response.raise_for_status()
@@ -863,7 +828,7 @@ def trendingThumbnail():
     lang = request.args.get('lang', 'en')  
     return fetchAndServeTrendsThumbnail(ip, port, lang)    
 def fetchAndServePopularThumbnail(ip, port, type=None):
-    url = "http://{ip}:{port}/api/popular"
+    url = "http://{ip}:{port}/api/popular&key={accessId}"
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -879,7 +844,7 @@ def fetchAndServePopularThumbnail(ip, port, type=None):
         print("Error processing feed data:", e)
         return "Error processing feed data", 500
 def fetchAndServeChannelUploadsThumbnail2(ip, port, browseId):
-    url = f"http://{ip}:{port}/api/channels/{browseId}/uploads"
+    url = f"http://{ip}:{port}/api/channels/{browseId}/uploads&key={accessId}"
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -894,25 +859,30 @@ def fetchAndServeChannelUploadsThumbnail2(ip, port, browseId):
     except Exception as e:
         print("Error processing feed data:", e)
         return "Error processing feed data", 500    
-def fetchAndServeChannelUploadsThumbnail(ip, port, channelId):
-    url = f"http://{ip}:{port}/api/channels/{channelId}/uploads"
+def fetchAndServeChannelUploadsThumbnail2(ip, port, channelId):
+    url = f'https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id={channelId}&key={DATA_API_KEY}'
     try:
         response = requests.get(url)
         response.raise_for_status()
-        data = response.text
-        thumbnailMatch = re.search(r"<media:thumbnail yt:name='mqdefault' url='(.*?)'", data)
-        thumbnailUrl = thumbnailMatch.group(1) if thumbnailMatch else None
-        if thumbnailUrl:
-            return redirect(thumbnailUrl, code=302)
+        data = response.json()
+        uploads_playlist_id = data['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+        playlist_url = f'https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=1&playlistId={uploads_playlist_id}&key={DATA_API_KEY}'
+        playlist_response = requests.get(playlist_url)
+        playlist_response.raise_for_status()
+        playlist_data = playlist_response.json()
+        if 'items' in playlist_data:
+            video = playlist_data['items'][0]['snippet']
+            video_id = video['resourceId']['videoId']
+            thumbnail_url = f'http://i.ytimg.com/vi/{video_id}/mqdefault.jpg'
+            return redirect(thumbnail_url, code=302)
         else:
-            default = 'http://i.ytimg.com/vi/e/0.jpg'
-            return redirect(default, code=302)
+            return 'No videos found in the uploads playlist', 404
     except Exception as e:
-        print("Error processing feed data:", e)
-        return "Error processing feed data", 500        
+        print("Error fetching or processing data:", e)
+        return "Error fetching channel data", 500
 def getAuthorName(ip, port, channelId):
     try:
-        url = f"http://{ip}:{port}/api/channels/{channelId}/uploads"
+        url = f"http://{ip}:{port}/api/channels/{channelId}/uploads&key={accessId}"
         response = requests.get(url)
         response.raise_for_status()
         data = response.text
@@ -960,7 +930,13 @@ def musicThumbnail():
     ip = getIp()
     port = getPort()
     lang = request.args.get('lang', 'en')  
-    return fetchAndServeMusicThumbnail(ip, port, lang)    
+    return fetchAndServeMusicThumbnail(ip, port, lang)   
+@app.route('/api/thumbnails/categories/v3/movies', methods=['GET'])
+def moviesThumbnail():
+    ip = getIp()
+    port = getPort()
+    lang = request.args.get('lang', 'en')  
+    return fetchAndServeMoviesThumbnail(ip, port, lang)        
 @app.route('/api/thumbnails/categories/v2/gaming', methods=['GET'])
 def gamingThumbnail():
     ip = getIp()
@@ -985,93 +961,87 @@ def newsThumbnail():
     port = getPort()
     lang = request.args.get('lang', 'en')  
     return fetchAndServeNewsThumbnail(ip, port, lang)
-@app.route('/api/videos/get/<videoId>', methods=['GET'])
-def getVideo(videoId):
-    try:
-        ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]',
-            'outtmpl': f'assets/{videoId}.%(ext)s',
+def file_expired(file_path):
+    if not os.path.exists(file_path):
+        return True
+    file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
+    expiration_time = file_mtime + timedelta(hours=48)
+    return datetime.now() > expiration_time
+@app.route('/video/get/<videoId>', methods=['GET'])
+def get_video(videoId):
+    return getVideo.fetch(videoId)    
+@app.route('/video/info/<videoId>', methods=['GET'])
+def _getVideoInfo(videoId):
+    return getVideoInfo.build(videoId)
+@app.route("/timedtext")
+def timedtext():
+    video_id = request.args.get("v", "")
+    type_ = request.args.get("type")
+    use_json = "json" in request.args
+    reset_cache = "resetcache=1" in (request.headers.get("Referer", ""))    
+    if type_ == "list":
+        data = get_languages(video_id, reset_cache)
+        return jsonify(data) if use_json else generateXMLList(data)
+    elif type_ == "track":
+        lang = request.args.get("lang", "")
+        xml = getCaption(video_id, lang)
+        return jsonify(parseCaptionsInJSONFormat(xml)) if use_json else xml    
+    return "Invalid request", 400
+def get_languages(video_id, reset_cache=False):
+    cache_file = os.path.join(CACHE_DIR, f"{video_id}_langs.json")
+    if not reset_cache and os.path.exists(cache_file):
+        with open(cache_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    data = {}
+    with open(cache_file, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    return data
+def getCaption(video_id, language):
+    filename = os.path.join(CACHE_DIR, f"{video_id}-{language}.xml")
+    if os.path.exists(filename):
+        with open(filename, "r", encoding="utf-8") as f:
+            return f.read()
+    
+    languages = get_languages(video_id)
+    if language in languages:
+        try:
+            response = requests.get(languages[language]["url"])
+            if response.status_code == 404 or DEFAULTS[0] in response.text:
+                return DEFAULTS[1]
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(response.text)
+            return response.text
+        except requests.RequestException:
+            return ""
+    return ""
+def parseCaptionsInJSONFormat(xml_data):
+    def b_float(value):
+        return round(float(value), 1)
+    
+    json_data = {}
+    root = ET.fromstring(xml_data)
+    for text in root.findall("text"):
+        start_time = b_float(text.attrib.get("start", "0"))
+        while start_time in json_data:
+            start_time += 0.1
+        json_data[start_time] = {
+            "text": text.text or "",
+            "start": start_time,
+            "duration": b_float(text.attrib.get("dur", "0")),
+            "end": b_float(start_time + b_float(text.attrib.get("dur", "0")))
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([f'https://www.youtube.com/watch?v={videoId}'])
-
-        _input = f"assets/{videoId}.mp4"
-        if not os.path.exists(_input):
-            abort(404, description="Downloaded video not found.")
-        output = f"assets/{videoId}.webm"
-        if os.path.exists(output):
-            return send_from_directory(os.getcwd(), output, as_attachment=True)
-        command = [
-            'ffmpeg', '-v', 'verbose', '-i', _input, 
-            '-c:v', 'libvpx', '-b:v', '500k', '-cpu-used', '8', 
-            '-vf', 'scale=-1:360', '-pix_fmt', 'yuv420p',
-            '-c:a', 'libvorbis', '-b:a', '128k', '-r', '30', '-g', '30', 
-            output
-        ]
-        subprocess.run(command)
-        return send_from_directory(os.getcwd(), output, as_attachment=True)
-    except Exception as e:
-        print(f"Error: {e}")
-        abort(500, description="An error occurred while processing the video.")
-@app.route('/api/videos/info/<videoId>', methods=['GET'])
-def getVideoInfo(videoId):
-    streamUrl = f"https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&videoId={videoId}"
-    headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20210714.01.00"
-            }
-        },
-        "videoId": videoId,
-        "params": ""
-    }
-    response = requests.post(streamUrl, json=payload, headers=headers)
-    if response.status_code != 200:
-        return f"Error retrieving video info: {response.status_code}", response.status_code
-    try:
-        json_data = response.json()
-        title = json_data['videoDetails']['title']
-        length_seconds = json_data['videoDetails']['lengthSeconds']
-        author = json_data['videoDetails']['author']
-    except KeyError as e:
-        return f"Missing key: {e}", 400
-    fmtList = "43/854x480/9/0/115"
-    fmtStreamMap = f"43|"
-    fmtMap = "43/0/7/0/0"    
-    thumbnailUrl = f"http://i.ytimg.com/vi/{videoId}/mqdefault.jpg"
-    response = (
-        f"status=ok&"
-        f"length_seconds={length_seconds}&"
-        f"keywords=a&"
-        f"vq=None&"
-        f"muted=0&"
-        f"avg_rating=5.0&"
-        f"thumbnailUrl={thumbnailUrl}&"
-        f"allow_ratings=1&"
-        f"hl=en&"
-        f"ftoken=&"
-        f"allow_embed=1&"
-        f"fmtMap={fmtMap}&"
-        f"fmt_url_map={fmtStreamMap}&"
-        f"token=null&"
-        f"plid=null&"
-        f"track_embed=0&"
-        f"author={author}&"
-        f"title={title}&"
-        f"videoId={videoId}&"
-        f"fmtList={fmtList}&"
-        f"fmtStreamMap={fmtStreamMap.split()[0]}"
-    )
-    return Response(response, content_type='text/plain')
+    return json_data
+def generateXMLList(data):
+    xml = "<subList>"
+    for index, (lang, info) in enumerate(data.items()):
+        xml += f'<track id="{index}" lang_code="{lang}" lang_name="{info["name"]}" />'
+    xml += "</subList>"
+    return xml
 @app.route('/apiplayer', methods=['GET'])
 def apiplayer():
+    key = request.args.get('key')
+    if key != accessId:
+        abort(403)
     version = request.args.get('version')
     _id = request.args.get('id')
     ps = request.args.get('ps')
@@ -1082,30 +1052,42 @@ def apiplayer():
     if version == '2' and _id == 'vflZLm5Vu' and ps == 'lbl' and el == 'leanback' and ccAutoCaps == '1' and cos == 'vodf' and cplatform == 'game_console':
         request_dump(request)
         return send_file(r"swf\apiplayer-vflZLm5Vu.swf", mimetype="application/x-shockwave-flash")
-    return send_file(r"swf\apiplayer.swf", mimetype="application/x-shockwave-flash")    
+    return send_file(r"swf\apiplayer.swf", mimetype="application/x-shockwave-flash") 
+@app.route('/subtitle_module',methods=['GET'])
+def subtitle_module():
+    request_dump(request)
+    return send_file(r"swf\subtitle_module.swf",mimetype="application/x-shockwave-flash")  
+@app.route('/iv_module',methods=['GET'])
+def iv_module():
+    request_dump(request)
+    return send_file(r"swf\iv_module.swf",mimetype="application/x-shockwave-flash")     
 @app.route('/wiitv', methods=['GET'])
 def lblWii():
-    request_dump(request)
-    oauthToken = request.args.get('access_token')
-    return send_file(r"swf\leanbacklite_wii.swf", mimetype="application/x-shockwave-flash")    
+    lang = request.args.get('lang', 'en')
+    lang_map = {'en', 'es', 'fr', 'it', 'de', 'nl', 'ja'}
+    if lang not in lang_map:
+        lang = 'en'
+    return send_file(f"swf/leanbacklite_wii.swf", mimetype="application/x-shockwave-flash") 
 @app.route('/api/users/<channelId>/icon', methods=['GET'])
 def getUserIcon(channelId):
-    url = f'https://inv.nadeko.net/api/v1/channels/{channelId}'
+    url = f'https://www.googleapis.com/youtube/v3/channels/?part=snippet&id={channelId}&key={DATA_API_KEY}'
     response = requests.get(url)
     if response.status_code != 200:
         return "Error fetching channel data", 500
     channelData = response.json()
-    authorThumbnails = channelData.get('authorThumbnails', [])
-    thumbnailUrl = None
-    for thumbnail in authorThumbnails:
-        if thumbnail['width'] == 48 and thumbnail['height'] == 48:
-            thumbnailUrl = thumbnail['url']
-            break
-    if thumbnailUrl:
-        thumbnailUrl = thumbnailUrl.replace('https://', 'http://', 1)
-        return redirect(thumbnailUrl)
+    items = channelData.get('items', [])
+    if not items:
+        return 'Channel is undefined', 404
+    thumbnails = items[0]['snippet']['thumbnails']
+    thumbnail_url = thumbnails.get('default', {}).get('url')    
+    if thumbnail_url:
+        thumbnail_response = requests.get(thumbnail_url)
+        if thumbnail_response.status_code == 200:
+            return Response(thumbnail_response.content, content_type='image/jpeg')
+        else:
+            return 'Failed to load thumbnail', 500
     else:
-        return "Thumbnail not found", 404        
+        return 'Thumbnail is undefined', 404
 @app.route('/o/oauth2/device/code', methods=['POST'])
 def deviceCode():
     response = requests.post(
@@ -1167,6 +1149,7 @@ def oauth2_token():
     response = requests.post(youtube_oauth_url, data=request.form)
     if response.status_code == 200:
         return jsonify(response.json())
+
 @app.route('/auth/youtube', methods=['POST'])
 def youtubeAuth():
     code = request.json.get('code')
@@ -1228,6 +1211,7 @@ if __name__ == '__main__':
         print("Building your configuration file")
         buildConfiguration(ip, port, env)
         installRequirements()
+        os.makedirs(CACHE_DIR, exist_ok=True)
     tree = ET.parse('configuration.xml')
     root = tree.getroot()
     ip = root.find('ip').text
